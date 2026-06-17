@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Journal Bubble Timeline</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #ffffff; }
+  #wrap {
+    width: 100%;
+    margin: 0 auto;
+    padding: 18px 14px;
+    box-sizing: border-box;
+    overflow-x: auto;          /* 48 columns -> scroll horizontally */
+  }
+  svg { display: block; width: 2200px; max-width: none; height: auto; }
+  text { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; }
+  .axis-label { fill: #444444; font-size: 13px; }
+  .row-label  { font-size: 19px; font-weight: 700; }
+  .axis-line  { stroke: #8a8a8a; stroke-width: 1.5; fill: none; }
+  .tick       { stroke: #555555; stroke-width: 1.6; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <svg id="chart" viewBox="0 0 2200 690" xmlns="http://www.w3.org/2000/svg"></svg>
+</div>
+
+<script>
+/* ----------------------------------------------------------------------
+   Geometry  (now 48 columns: 0 .. 47)
+---------------------------------------------------------------------- */
+const X0      = 30;    // x of column 0
+const DX      = 38;    // px per column
+const COLS     = 48;   // columns 0 .. 47
+const Y0      = 80;    // y of first row
+const DY      = 40;    // px per row
+const K       = 4.2;   // bubble radius scale (area-encoded: r = sqrt(v)*K)
+
+const xOf = (i) => X0 + i * DX;          // column index -> x
+const yOf = (r) => Y0 + r * DY;          // row index    -> y
+const rOf = (v) => v > 0 ? Math.sqrt(v) * K : 0;
+
+/* ----------------------------------------------------------------------
+   Sequential color families (ColorBrewer-style), light->dark within group
+---------------------------------------------------------------------- */
+const C = {
+  blue:   ['#2171b5', '#6baed6', '#9ecae1', '#c6dbef'],
+  orange: ['#d94601', '#f3791d', '#fda75c', '#fdcfa1'],
+  green:  ['#238b45', '#5cb85c', '#a1d99b', '#c7e9c0'],
+  purple: ['#6a51a3', '#9e9ac8', '#cbc9e2']
+};
+
+/* ----------------------------------------------------------------------
+   Data: original columns 0..13 (read off the source image).
+   Columns 14..47 are generated below, in each row's own character.
+---------------------------------------------------------------------- */
+const rows = [
+  // ---- BLUE group ----
+  { label: 'Movement disorders : official\u2026', color: C.blue[0],
+    v: [1.5,1.4,4,6,5,9,9,7,8.5,7,8.5,10,9.5,4] },
+  { label: 'Stereotactic and functional\u2026', color: C.blue[1],
+    v: [2.5,1.6,3,4,5,5,3.5,4,7.5,8.5,6,7,6,5] },
+  { label: 'Journal of neurosurgery', color: C.blue[2],
+    v: [2.5,1.6,4,4,5,5,4,5,6,5.5,5,6,5,4] },
+  { label: 'Brain research', color: C.blue[3],
+    v: [5,4,4,4,6.5,4,3,4,5,4,4.5,4,3,3] },
+
+  // ---- ORANGE / RED group ----
+  { label: 'Neurosurgery', color: C.orange[0],
+    v: [1.6,1.6,3,3,4,6.5,6.5,6,6.5,7,9.5,9.5,7.5,7.5] },
+  { label: 'Neurology', color: C.orange[1],
+    v: [4,4,4,5,7.5,8.5,5,4,5.5,4,5,6,6,4] },
+  { label: 'Parkinsonism & related\u2026', color: C.orange[2],
+    v: [2.5,2.5,3,4,5.5,5,6,5,6.5,6.5,5,6,6,5] },
+  { label: 'Experimental brain research\u2026.', color: C.orange[3],
+    v: [4,5,4,5.5,6.5,5,6.5,5,6.5,5,5,3,2.5,2] },
+
+  // ---- GREEN group ----
+  { label: 'Journal of neurology,\u2026', color: C.green[0],
+    v: [6,4,5,6.5,7.5,9,6,6,7.5,6,7,7.5,6,5] },
+  { label: 'Journal of neurophysiology', color: C.green[1],
+    v: [4,4,4,5,6.5,8.5,5,5,6.5,5,5,5.5,5,5] },
+  { label: 'Brain : a journal of neurology', color: C.green[2],
+    v: [3,3,4,5,6.5,6.5,5,6,6.5,7.5,6,6,5,5] },
+  { label: 'Experimental neurology', color: C.green[3],
+    v: [2.5,2.5,4,4,5,6.5,6.5,7.5,7.5,7.5,7,7,6,6] },
+
+  // ---- PURPLE group ----
+  { label: 'Conference proceedings : \u2026\u2026', color: C.purple[0],
+    v: [0,0,0,0,3,3,4.5,6.5,7.5,7.5,5,4,0,0] },
+  { label: 'Acta neurochirurgica', color: C.purple[1],
+    v: [2.5,2.5,3,4,4,4,4,4,5,6,6.5,6.5,6,5] },
+  { label: 'The Journal of neuroscience :\u2026', color: C.purple[2],
+    v: [2.5,2.5,3,4,4,5,5,5,6,6,7.5,7.5,7,6] },
+];
+
+/* ----------------------------------------------------------------------
+   Extend each row from 14 columns to 48, deterministically.
+   Each row oscillates around its own typical level so its identity holds:
+   big journals stay big, faint ones stay faint, gappy ones keep gaps.
+---------------------------------------------------------------------- */
+function mulberry32(a){
+  return function(){
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+const round5 = (x) => Math.round(x * 2) / 2;   // snap to .5 steps
+
+rows.forEach((row, ri) => {
+  const orig    = row.v.slice();                 // columns 0..13
+  const nonzero = orig.filter(x => x > 0);
+  const base    = nonzero.reduce((a,b) => a + b, 0) / nonzero.length;
+  const amp     = Math.max(1.5, (Math.max(...orig) - Math.min(...nonzero)) / 2);
+  const rng     = mulberry32(1000 + ri * 97);
+  const hasGaps = orig.some(x => x === 0);        // e.g. Conference proceedings
+  const phase   = rng() * Math.PI * 2;
+  const freq    = 0.30 + rng() * 0.45;
+
+  for (let i = 14; i < COLS; i++) {
+    if (hasGaps && rng() < 0.16) { orig.push(0); continue; }   // keep sparse gaps
+    let val = base + amp * Math.sin(phase + i * freq) + (rng() - 0.5) * 2.2;
+    val = Math.max(1.2, Math.min(10, val));
+    orig.push(round5(val));
+  }
+  row.v = orig;
+});
+
+/* labels begin just past the last column */
+const LABEL_X = xOf(COLS - 1) + 40;
+
+/* ----------------------------------------------------------------------
+   Build SVG
+---------------------------------------------------------------------- */
+const NS = 'http://www.w3.org/2000/svg';
+const svg = document.getElementById('chart');
+
+function el(tag, attrs, text){
+  const n = document.createElementNS(NS, tag);
+  for (const k in attrs) n.setAttribute(k, attrs[k]);
+  if (text != null) n.textContent = text;
+  svg.appendChild(n);
+  return n;
+}
+
+/* --- Top number line: baseline + a tick & number for every column 0..47 --- */
+const axisY   = 46;
+const tickLen = 9;
+
+el('line', {
+  x1: xOf(0), y1: axisY, x2: xOf(COLS - 1), y2: axisY, class: 'axis-line'
+});
+
+for (let i = 0; i < COLS; i++) {
+  const x = xOf(i);
+  el('line', { x1: x, y1: axisY, x2: x, y2: axisY + tickLen, class: 'tick' });
+  el('text', { x: x, y: axisY - 11, 'text-anchor': 'middle', class: 'axis-label' }, String(i));
+}
+
+/* --- Bubble rows --- */
+rows.forEach((row, ri) => {
+  const cy = yOf(ri);
+
+  row.v.forEach((val, yi) => {
+    const r = rOf(val);
+    if (r <= 0) return;
+    el('circle', { cx: xOf(yi), cy: cy, r: r.toFixed(2), fill: row.color });
+  });
+
+  el('text', { x: LABEL_X, y: cy + 6, class: 'row-label', fill: row.color }, row.label);
+});
+</script>
+</body>
+</html>
